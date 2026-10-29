@@ -1,5 +1,5 @@
-/* Chronos3D service worker — offline shell cache */
-const CACHE = 'chronos3d-v2';
+/* Chronos3D service worker — offline shell, network-first for the app itself */
+const CACHE = 'chronos3d-v3';
 const SHELL = [
   './',
   './index.html',
@@ -12,7 +12,9 @@ const SHELL = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      .then((c) => c.addAll(SHELL).catch(() => {}))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -24,27 +26,56 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+/* The app shell must never be pinned to an old build: fetch it from the
+   network first and only fall back to the cached copy when offline. */
+function networkFirst(req, key) {
+  return fetch(req, { cache: 'no-store' })
+    .then((res) => {
+      if (res && res.ok) {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(key || req, copy)).catch(() => {});
+      }
+      return res;
+    })
+    .catch(() =>
+      caches.match(key || req).then((hit) => hit || caches.match('./index.html'))
+    );
+}
+
+/* Everything else (icons, manifest) is served from cache instantly and
+   refreshed in the background. */
+function staleWhileRevalidate(req) {
+  return caches.match(req).then((hit) => {
+    const network = fetch(req)
+      .then((res) => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+        }
+        return res;
+      })
+      .catch(() => hit);
+    return hit || network;
+  });
+}
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
 
-  // Navigations: serve the cached shell, fall back to network.
-  if (req.mode === 'navigate') {
-    event.respondWith(
-      caches.match('./index.html').then((hit) => hit || fetch(req).catch(() => caches.match('./index.html')))
-    );
+  const url = new URL(req.url);
+  const sameOrigin = url.origin === self.location.origin;
+  const isShell =
+    req.mode === 'navigate' ||
+    (sameOrigin && (url.pathname.endsWith('/') || url.pathname.endsWith('/index.html')));
+
+  if (isShell) {
+    event.respondWith(networkFirst(req, sameOrigin ? './index.html' : null));
     return;
   }
 
-  // Everything else: cache-first, then network (and cache what we get).
-  event.respondWith(
-    caches.match(req).then((hit) => {
-      if (hit) return hit;
-      return fetch(req).then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
-        return res;
-      }).catch(() => hit);
-    })
-  );
+  if (sameOrigin) {
+    event.respondWith(staleWhileRevalidate(req));
+  }
+  /* cross-origin (fonts) is left to the browser so a slow CDN never blocks */
 });
