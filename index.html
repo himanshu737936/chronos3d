@@ -14,6 +14,8 @@
 <link rel="manifest" href="manifest.json" />
 <link rel="apple-touch-icon" href="icons/icon-192.png" />
 <meta name="application-name" content="Chronos3D" />
+<meta name="app-version" content="3.1.0" />
+<meta name="app-build" content="2026-10-29" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@300;500;700&display=swap" rel="stylesheet" />
@@ -1760,6 +1762,9 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
   var FF = (global.FF = global.FF || {});
   var KEY = 'chronos3d.state.v3';
+  var APP_VERSION = '3.1.0';
+  var APP_BUILD = '2026-10-29';
+  FF.version = function () { return { version: APP_VERSION, build: APP_BUILD }; };
   var LEGACY = ['chronos3d.state.v2', 'chronos3d.state.v1'];
   var VAULT = 'chronos3d.vault.v1';
 
@@ -5844,6 +5849,30 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
     reader.readAsText(file);
   }
 
+  /* A one-tap escape hatch: drop every cache, re-check the service worker
+     and reload. Useful when an installed app is stuck on an older build. */
+  function forceRefresh() {
+    FF.snack('Refreshing to the newest build…', { kind: 'good' });
+    var jobs = [];
+    try {
+      if (global.caches && caches.keys) {
+        jobs.push(caches.keys().then(function (keys) {
+          return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+        }));
+      }
+      if (global.navigator && navigator.serviceWorker) {
+        jobs.push(navigator.serviceWorker.getRegistrations().then(function (regs) {
+          return Promise.all(regs.map(function (r) { return r.update().catch(function () {}); }));
+        }));
+      }
+    } catch (e) { /* ignore */ }
+    Promise.all(jobs).catch(function () {}).then(function () {
+      setTimeout(function () {
+        try { location.reload(); } catch (e) { /* ignore */ }
+      }, 400);
+    });
+  }
+
   function openPinSheet() {
     if (!FF.vault.available()) {
       FF.snack('PIN lock needs https — open the hosted version.', { kind: 'warn' });
@@ -5943,8 +5972,11 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
           FF.state.subjects.length + ' subjects · ' + FF.state.cards.length + ' cards · ' + (size / 1024).toFixed(1) + ' KB' +
         '</small></span></button>' +
         '<button class="menu-item danger" id="mReset"><span class="mi-icon">&#10005;</span><span>Reset everything<small>Deletes tasks, subjects, cards, sessions</small></span></button>' +
+        '<button class="menu-item" id="mRefresh"><span class="mi-icon">&#8635;</span><span>Force refresh<small>Clear the cache and load the newest build</small></span></button>' +
         '<p class="hint">Everything is stored on this device. No account, no server, no tracking.</p>' +
-        '<p class="hint" style="text-align:center;margin-top:16px;letter-spacing:.16em;text-transform:uppercase">' +
+        '<p class="hint" style="text-align:center;margin-top:16px">Version <b style="color:var(--cyan)">' +
+          FF.version().version + '</b> · build ' + FF.version().build + '</p>' +
+        '<p class="hint" style="text-align:center;margin-top:6px;letter-spacing:.16em;text-transform:uppercase">' +
           'Made by <b style="color:var(--cyan)">Himanshu</b></p>',
       mount: function (body) {
         var inst = body.querySelector('#mInstall');
@@ -5956,6 +5988,10 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
             installing = null;
           });
           FF.sheet.close();
+        });
+
+        body.querySelector('#mRefresh').addEventListener('click', function () {
+          forceRefresh();
         });
 
         body.querySelector('#mTheme').addEventListener('click', function () {

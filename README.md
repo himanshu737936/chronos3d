@@ -7,6 +7,8 @@ rendered 3D "focus city" as the centrepiece.
 
 No account, no server, no build step. Everything you enter stays in your browser's local storage.
 
+**Version 3.1.0** · build 2026-10-29
+
 ## Features
 
 - **Focus timer & pomodoro engine** — configurable session and break lengths, presets, custom time,
@@ -23,6 +25,17 @@ No account, no server, no build step. Everything you enter stays in your browser
 - **Coach** — short, rule-based nudges based on your recent consistency.
 - **Offline & installable** — ships a web app manifest and a service worker, so it installs to the
   home screen and works without a connection.
+
+## Updating
+
+The app ships a service worker that fetches the shell from the network first and
+falls back to the cached copy only when offline, so a new deploy reaches an
+installed app on the next launch. If an installed copy ever looks stale, open
+the menu (⋮) and tap **Force refresh** — it clears the cache, re-checks the
+worker and reloads.
+
+The version is visible in that same menu, and in the page as
+`<meta name="app-version">`.
 
 ## Run it
 
