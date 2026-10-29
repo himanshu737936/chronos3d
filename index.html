@@ -3028,11 +3028,17 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   }
 
   function start() {
-    if (p.remaining <= 0) p.remaining = phaseMs(p.phase);
+    var full = phaseMs(p.phase);
+    if (p.remaining <= 0) p.remaining = full;
+    /* a resume is not a new block: keep the exit count and the original
+       start record instead of logging a second start for the same block */
+    var fresh = p.remaining >= full;
     p.endsAt = Date.now() + p.remaining;
     p.running = true;
-    p.leaves = 0;
-    p.startId = (FF.logStart(p.phase === 'work' ? 'work' : p.phase, phaseMs(p.phase)) || {}).id || '';
+    if (fresh) {
+      p.leaves = 0;
+      p.startId = (FF.logStart(p.phase === 'work' ? 'work' : p.phase, full) || {}).id || '';
+    }
     FF.sound('start');
     FF.haptic('toggle');
     FF.wake.request();
@@ -3450,6 +3456,8 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
     if (cd.startId) FF.completeStart(cd.startId);
     var logged = cd.sessionMs || FF.state.countdown.duration;
     FF.logSession('focus', logged, '', '');
+    /* clear the finished run so the next countdown logs its own length */
+    cd.sessionMs = 0; cd.startId = '';
     FF.sound('done'); FF.haptic('done');
     FF.notify('Countdown complete', U.fmtDuration(logged) + ' of focus banked.');
     FF.snack('Countdown complete · ' + U.fmtDuration(logged) + ' logged', { kind: 'good' });
@@ -3489,57 +3497,6 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
           });
         });
 
-        /* presets */
-        body.querySelectorAll('[data-preset]').forEach(function (b) {
-          b.addEventListener('click', function (e) {
-            if (e.target.closest('[data-delpreset]')) return;
-            var pr = (s().presets || []).filter(function (x) { return x.id === b.dataset.preset; })[0];
-            if (!pr) return;
-            body.querySelector('#stWork').value = pr.work;
-            body.querySelector('#stShort').value = pr.short;
-            body.querySelector('#stLong').value = pr.long;
-            body.querySelector('#stCycles').value = pr.cycles;
-            FF.haptic('select');
-            FF.snack('Preset loaded: ' + pr.name, { kind: 'good' });
-          });
-        });
-
-        body.querySelectorAll('[data-delpreset]').forEach(function (x) {
-          x.addEventListener('click', function (e) {
-            e.stopPropagation();
-            s().presets = (s().presets || []).filter(function (pr) { return pr.id !== x.dataset.delpreset; });
-            FF.persist();
-            x.closest('.preset-chip').remove();
-            FF.haptic('warn');
-          });
-        });
-
-        body.querySelector('#presetSave').addEventListener('click', function () {
-          var name = body.querySelector('#presetName').value.trim();
-          var w = U.num(body.querySelector('#stWork').value, 25, 1, 180);
-          if (!name) name = w + '/' + U.num(body.querySelector('#stShort').value, 5, 1, 60);
-          s().presets = (s().presets || []).concat([{
-            id: U.uid(), name: name, work: w,
-            short: U.num(body.querySelector('#stShort').value, 5, 1, 60),
-            long: U.num(body.querySelector('#stLong').value, 15, 1, 90),
-            cycles: U.num(body.querySelector('#stCycles').value, 4, 2, 12)
-          }]);
-          FF.persist();
-          FF.snack('Preset saved', { kind: 'good' });
-          FF.haptic('done');
-
-          /* repaint just the chip row — reopening the sheet lost scroll position */
-          var list = body.querySelector('#presetList');
-          var all = s().presets || [];
-          if (list) {
-            list.innerHTML = all.map(function (pr) {
-              return '<button type="button" class="preset-chip" data-preset="' + pr.id + '">' +
-                '<b>' + pr.work + '/' + pr.short + '</b>' + U.esc(pr.name) +
-                '<span class="x" data-delpreset="' + pr.id + '">&#10005;</span></button>';
-            }).join('');
-          }
-          body.querySelector('#presetName').value = '';
-        });
         body.querySelectorAll('input[type="number"]').forEach(function (input) {
           var fix = function () { input.value = U.num(input.value, Number(input.min), Number(input.min), Number(input.max)); };
           input.addEventListener('change', fix);
@@ -3993,7 +3950,12 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
         var step = t.repeat === 'daily' ? 1 : 7;
         var base = t.due ? new Date(t.due + 'T00:00:00') : new Date();
         var nextDue = U.dayKey(U.addDays(base, step));
-        all().push({
+        /* re-ticking a repeating task must not mint a second copy of the
+           same occurrence — only queue the next one if it is not there yet */
+        var twin = all().some(function (x) {
+          return !x.done && x.repeat === t.repeat && x.title === t.title && x.due === nextDue;
+        });
+        if (!twin) all().push({
           id: U.uid(), title: t.title, priority: t.priority, due: nextDue,
           tag: t.tag, subjectId: t.subjectId, est: t.est, pomos: 0,
           subtasks: (t.subtasks || []).map(function (x) { return { id: U.uid(), title: x.title, done: false }; }),
@@ -4318,6 +4280,10 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   var STATUS = ['new', 'revising', 'mastered'];
   var STATUS_LABEL = { new: 'New', revising: 'Revising', mastered: 'Mastered' };
 
+  /* colours come from storage (and from imported backups), so never
+     trust them straight into an inline style */
+  function safeColor(c) { return /^#[0-9a-fA-F]{6}$/.test(c || '') ? c : COLORS[0]; }
+
   var el = {};
   var planDay = U.todayKey();
   var queue = [];
@@ -4339,7 +4305,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
       var mins = FF.intel.subjectMinutes(sub.id, 7);
       return '<div class="subject" data-id="' + sub.id + '">' +
         '<div class="subject-head">' +
-          '<span class="subject-dot" style="background:' + sub.color + ';color:' + sub.color + '"></span>' +
+          '<span class="subject-dot" style="background:' + safeColor(sub.color) + ';color:' + safeColor(sub.color) + '"></span>' +
           '<span class="subject-name">' + U.esc(sub.name) + '</span>' +
           '<span class="subject-pct">' + pct + '%</span>' +
         '</div>' +
@@ -4385,7 +4351,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
           (isEdit ? '<button class="btn btn-danger" id="sDelete">Delete</button>' : '') +
           '<button class="btn btn-primary" id="sSave">' + (isEdit ? 'Save' : 'Add subject') + '</button></div>',
       mount: function (body) {
-        var color = s.color;
+        var color = safeColor(s.color);
         body.querySelectorAll('#sColor .swatch').forEach(function (b) {
           b.addEventListener('click', function () {
             color = b.dataset.c;
@@ -4920,6 +4886,8 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
     renderSubjects: renderSubjects,
     renderExams: renderExams,
+    renderPlan: renderPlan,
+    buildQueue: buildQueue,
     dueCount: function () { return dueCards().length; },
     planGap: planGap
   };
@@ -5837,7 +5805,10 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
       FF.tasks.render();
       FF.study.renderSubjects();
       FF.study.renderExams();
+      if (FF.study.renderPlan) FF.study.renderPlan();
+      if (FF.study.buildQueue) FF.study.buildQueue();
       FF.analytics.render();
+      FF.theme.apply(FF.state.settings.theme, true);
       updateHome();
       FF.snack('Data imported', { kind: 'good' });
     };
