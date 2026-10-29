@@ -1,11 +1,13 @@
 /* Chronos3D service worker — offline shell cache */
-const CACHE = 'chronos3d-v1';
+const CACHE = 'chronos3d-v2';
 const SHELL = [
   './',
   './index.html',
   './manifest.json',
   './icons/icon-192.png',
-  './icons/icon-512.png'
+  './icons/icon-512.png',
+  './icons/maskable-192.png',
+  './icons/maskable-512.png'
 ];
 
 self.addEventListener('install', (event) => {
