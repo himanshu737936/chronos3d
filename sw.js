@@ -1,5 +1,5 @@
 /* Chronos3D service worker — offline shell, network-first for the app itself */
-const CACHE = 'chronos3d-v4';
+const CACHE = 'chronos3d-v5';
 const SHELL = [
   './',
   './index.html',

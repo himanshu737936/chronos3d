@@ -14,7 +14,7 @@
 <link rel="manifest" href="manifest.json" />
 <link rel="apple-touch-icon" href="icons/icon-192.png" />
 <meta name="application-name" content="Chronos3D" />
-<meta name="app-version" content="3.1.0" />
+<meta name="app-version" content="3.1.1" />
 <meta name="app-build" content="2026-10-29" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -173,6 +173,7 @@ svg { display: block; }
 .app {
   position: fixed; inset: 0;
   display: flex; flex-direction: column;
+  height: 100vh;            /* fallback for browsers without dvh */
   height: 100dvh;
   perspective: 1500px;
   background:
@@ -300,6 +301,7 @@ svg { display: block; }
 .dial {
   position: relative;
   width: min(74vw, 290px);
+  height: min(74vw, 290px);   /* fallback: aspect-ratio is Chrome 88+ */
   aspect-ratio: 1;
   margin: 0 auto;
   display: grid; place-items: center;
@@ -692,6 +694,7 @@ svg { display: block; }
 .flash-stage { width: 100%; perspective: 1400px; }
 .flashcard {
   position: relative; width: 100%; height: 250px;
+  -webkit-transform-style: preserve-3d;
   transform-style: preserve-3d;
   transition: transform .62s var(--ease);
   cursor: pointer;
@@ -837,6 +840,7 @@ canvas { width: 100%; display: block; }
 .sheet-backdrop.is-open { opacity: 1; }
 .sheet {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 100;
+  max-height: 86vh;         /* fallback for browsers without dvh */
   max-height: 86dvh; display: flex; flex-direction: column;
   padding: 8px 18px calc(26px + var(--safe-bottom));
   border-radius: 26px 26px 0 0;
@@ -1762,7 +1766,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
   var FF = (global.FF = global.FF || {});
   var KEY = 'chronos3d.state.v3';
-  var APP_VERSION = '3.1.0';
+  var APP_VERSION = '3.1.1';
   var APP_BUILD = '2026-10-29';
   FF.version = function () { return { version: APP_VERSION, build: APP_BUILD }; };
   var LEGACY = ['chronos3d.state.v2', 'chronos3d.state.v1'];
@@ -1826,6 +1830,23 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   function dayKey(d) { var x = new Date(d); return x.getFullYear() + '-' + pad(x.getMonth() + 1) + '-' + pad(x.getDate()); }
   function todayKey() { return dayKey(new Date()); }
   function addDays(d, n) { var x = new Date(d); x.setDate(x.getDate() + n); return x; }
+  /* Intl is not equal on every Android build: some OEM WebViews throw on a
+     locale + options pair, which used to take the whole Study screen down
+     with them. Always fall back to something readable. */
+  function fmtDate(d, opts) {
+    var date = d instanceof Date ? d : new Date(d);
+    if (isNaN(date.getTime())) return '';
+    try { return date.toLocaleDateString('en-IN', opts); } catch (e) {}
+    try { return date.toLocaleDateString(); } catch (e2) {}
+    return date.getDate() + '/' + (date.getMonth() + 1) + '/' + date.getFullYear();
+  }
+  function fmtTime(d, opts) {
+    var date = d instanceof Date ? d : new Date(d);
+    if (isNaN(date.getTime())) return '';
+    try { return date.toLocaleTimeString('en-IN', opts); } catch (e) {}
+    try { return date.toLocaleTimeString(); } catch (e2) {}
+    return pad(date.getHours()) + ':' + pad(date.getMinutes());
+  }
   function esc(str) {
     return String(str == null ? '' : str)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -2001,6 +2022,28 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
     FF.state = normalise(obj);
     FF.persist();
   };
+
+  /* ---------------- error log ----------------
+     Phones differ. Keep the last few failures around so the Diagnostics
+     screen can show what actually went wrong on a device we cannot see. */
+  var ERRORS = [];
+  function noteError(msg) {
+    var line = String(msg == null ? 'unknown' : msg).slice(0, 240);
+    if (!line) return;
+    ERRORS.push(line);
+    if (ERRORS.length > 30) ERRORS.shift();
+  }
+  FF.errors = function () { return ERRORS.slice(-8); };
+  FF.noteError = noteError;
+  try {
+    global.addEventListener('error', function (e) {
+      noteError((e.message || 'script error') + (e.lineno ? ' @line ' + e.lineno : ''));
+    });
+    global.addEventListener('unhandledrejection', function (e) {
+      var r = e.reason;
+      noteError('promise: ' + ((r && (r.message || r)) || 'unknown'));
+    });
+  } catch (e) { /* very old engines */ }
 
   /* ---------------- bus ---------------- */
   var handlers = {};
@@ -2418,7 +2461,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
     uid: uid, pad: pad, clamp: clamp, num: num, debounce: debounce,
     fmtClock: fmtClock, fmtStopwatch: fmtStopwatch, fmtDuration: fmtDuration,
     startOfDay: startOfDay, dayKey: dayKey, todayKey: todayKey, addDays: addDays,
-    esc: esc, clone: clone
+    esc: esc, clone: clone, fmtDate: fmtDate, fmtTime: fmtTime
   };
 
 })(window);
@@ -3867,7 +3910,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
     if (diff === 0) return { text: 'today', overdue: false };
     if (diff === 1) return { text: 'tomorrow', overdue: false };
     if (diff <= 7) return { text: 'in ' + diff + 'd', overdue: false };
-    return { text: d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }), overdue: false };
+    return { text: U.fmtDate(d, { day: '2-digit', month: 'short' }), overdue: false };
   }
 
   function visible() {
@@ -4683,7 +4726,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
     if (key === U.dayKey(U.addDays(new Date(), 1))) return 'Tomorrow';
     if (key === U.dayKey(U.addDays(new Date(), -1))) return 'Yesterday';
     var d = new Date(key + 'T00:00:00');
-    return d.toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' });
+    return U.fmtDate(d, { weekday: 'short', day: '2-digit', month: 'short' });
   }
 
   function hhmm(min) { return U.pad(Math.floor(min / 60)) + ':' + U.pad(min % 60); }
@@ -5171,7 +5214,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
         ctx.font = '8.5px "JetBrains Mono", monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        ctx.fillText(d.date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }), labelX, baseY + 9);
+        ctx.fillText(U.fmtDate(d.date, { day: '2-digit', month: 'short' }), labelX, baseY + 9);
       }
     }
     drawCity.last = -999;
@@ -5275,7 +5318,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
       var mins = (map[key] || 0) / 60000;
       var lvl = mins === 0 ? 0 : mins < 20 ? 1 : mins < 50 ? 2 : mins < 90 ? 3 : 4;
       html += '<i class="' + (lvl ? 'l' + lvl : '') + '" title="' +
-        U.esc(d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) + ' · ' + Math.round(mins) + 'm') + '"></i>';
+        U.esc(U.fmtDate(d, { day: '2-digit', month: 'short' }) + ' · ' + Math.round(mins) + 'm') + '"></i>';
     }
     host.innerHTML = html;
   }
@@ -5297,8 +5340,8 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
       var name = task ? task.title : (sub ? sub.name : '');
       if (name.length > 16) name = name.slice(0, 15) + '…';
       var note = s.note ? '<br><span style="opacity:.55;font-size:10.5px">' + U.esc(s.note) + '</span>' : '';
-      return '<tr><td>' + when.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) + '<br>' +
-        when.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }) + '</td>' +
+      return '<tr><td>' + U.fmtDate(when, { day: '2-digit', month: 'short' }) + '<br>' +
+        U.fmtTime(when, { hour: '2-digit', minute: '2-digit', hour12: false }) + '</td>' +
         '<td><span class="type-pill ' + s.type + '">' + label + '</span></td>' +
         '<td>' + U.fmtDuration(s.ms) + '</td>' +
         '<td>' + (name ? U.esc(name) : '<span style="opacity:.4">—</span>') + note + '</td></tr>';
@@ -5797,7 +5840,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
       var task = s.taskId ? FF.taskById(s.taskId) : null;
       rows.push([
         s.day,
-        d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }),
+        U.fmtTime(d, { hour: '2-digit', minute: '2-digit', hour12: false }),
         s.type,
         (s.ms / 60000).toFixed(0),
         sub ? sub.name : '',
@@ -5870,6 +5913,74 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
       setTimeout(function () {
         try { location.reload(); } catch (e) { /* ignore */ }
       }, 400);
+    });
+  }
+
+  /* Everything we would ask for on a bug report, in one screen. */
+  function storageSize() {
+    try { return (new Blob([JSON.stringify(FF.state)]).size / 1024).toFixed(1); }
+    catch (e) { return '0'; }
+  }
+
+  function openDiagnostics() {
+    function supports(prop, value) {
+      try { return CSS && CSS.supports && CSS.supports(prop, value); } catch (e) { return false; }
+    }
+    var ua = (global.navigator && navigator.userAgent) || 'unknown';
+    var v = FF.version();
+    var lines = [
+      'Chronos3D ' + v.version + ' (' + v.build + ')',
+      'UA: ' + ua,
+      'Viewport: ' + global.innerWidth + 'x' + global.innerHeight + ' @' + (global.devicePixelRatio || 1) + 'x',
+      'Standalone: ' + (isStandalone() ? 'yes' : 'no') + ' · secure: ' + (global.isSecureContext ? 'yes' : 'no'),
+      'CSS dvh: ' + supports('height', '100dvh') + ' · aspect-ratio: ' + supports('aspect-ratio', '1/1') +
+        ' · gap(flex): ' + supports('gap', '1px') + ' · backdrop-filter: ' + supports('backdrop-filter', 'blur(1px)'),
+      'Theme: ' + FF.theme.current() + ' · PIN: ' + (FF.vault.enabled() ? 'on' : 'off'),
+      'Data: ' + FF.state.tasks.length + ' tasks · ' + FF.state.sessions.length + ' sessions · ' +
+        FF.state.subjects.length + ' subjects · ' + FF.state.cards.length + ' cards · ' + FF.state.plan.length + ' blocks',
+      'Storage: ' + storageSize() + ' KB',
+      'Errors: ' + (FF.errors().length ? '' : 'none')
+    ].concat(FF.errors().map(function (e) { return '  · ' + e; }));
+
+    var text = lines.join('\n');
+
+    FF.sheet.open({
+      title: 'Diagnostics',
+      autofocus: false,
+      html:
+        '<pre id="diagText" style="white-space:pre-wrap;word-break:break-word;font-family:var(--mono);' +
+          'font-size:10.5px;line-height:1.6;color:var(--ink-dim);background:rgba(255,255,255,.04);' +
+          'border:1px solid var(--stroke);border-radius:12px;padding:12px;margin:0 0 14px;max-height:46vh;overflow:auto">' +
+          U.esc(text) + '</pre>' +
+        '<button class="btn btn-primary btn-block" id="diagCopy">Copy for a bug report</button>',
+      mount: function (body) {
+        body.querySelector('#diagCopy').addEventListener('click', function () {
+          var done = function () { FF.snack('Copied — paste it in the chat', { kind: 'good' }); FF.haptic('done'); };
+          try {
+            if (global.navigator && navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text).then(done).catch(fallback);
+              return;
+            }
+          } catch (e) { /* fall through */ }
+          fallback();
+
+          function fallback() {
+            try {
+              var ta = document.createElement('textarea');
+              ta.value = text;
+              ta.style.position = 'fixed';
+              ta.style.opacity = '0';
+              body.appendChild(ta);
+              ta.select();
+              document.execCommand('copy');
+              ta.remove();
+              done();
+            } catch (e) {
+              FF.snack('Select the text above and copy it', { kind: 'warn' });
+            }
+          }
+        });
+      }
     });
   }
 
@@ -5972,6 +6083,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
           FF.state.subjects.length + ' subjects · ' + FF.state.cards.length + ' cards · ' + (size / 1024).toFixed(1) + ' KB' +
         '</small></span></button>' +
         '<button class="menu-item danger" id="mReset"><span class="mi-icon">&#10005;</span><span>Reset everything<small>Deletes tasks, subjects, cards, sessions</small></span></button>' +
+        '<button class="menu-item" id="mDiag"><span class="mi-icon">&#8801;</span><span>Diagnostics<small>Version, device, feature support, last errors</small></span></button>' +
         '<button class="menu-item" id="mRefresh"><span class="mi-icon">&#8635;</span><span>Force refresh<small>Clear the cache and load the newest build</small></span></button>' +
         '<p class="hint">Everything is stored on this device. No account, no server, no tracking.</p>' +
         '<p class="hint" style="text-align:center;margin-top:16px">Version <b style="color:var(--cyan)">' +
@@ -5988,6 +6100,11 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
             installing = null;
           });
           FF.sheet.close();
+        });
+
+        body.querySelector('#mDiag').addEventListener('click', function () {
+          FF.sheet.close();
+          setTimeout(openDiagnostics, 240);
         });
 
         body.querySelector('#mRefresh').addEventListener('click', function () {

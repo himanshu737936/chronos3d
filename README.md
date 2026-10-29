@@ -7,7 +7,7 @@ rendered 3D "focus city" as the centrepiece.
 
 No account, no server, no build step. Everything you enter stays in your browser's local storage.
 
-**Version 3.1.0** · build 2026-10-29
+**Version 3.1.1** · build 2026-10-29
 
 ## Features
 
@@ -35,7 +35,10 @@ the menu (⋮) and tap **Force refresh** — it clears the cache, re-checks the
 worker and reloads.
 
 The version is visible in that same menu, and in the page as
-`<meta name="app-version">`.
+`<meta name="app-version">`. The menu also has **Diagnostics**, which shows the
+build, the device and browser string, viewport, which CSS features the browser
+supports, storage size and the last few runtime errors — the quickest way to
+report a problem on a phone we cannot see.
 
 ## Run it
 
