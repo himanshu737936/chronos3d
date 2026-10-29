@@ -1,0 +1,68 @@
+# Chronos3D — a 3D study OS for Android
+
+Chronos3D is a single-file, installable web app (PWA) built for studying on an Android phone.
+It bundles a focus timer, a pomodoro engine, task management, a syllabus tracker, spaced-repetition
+flashcards, a day planner and deep session analytics into one dark, animated interface — with a
+rendered 3D "focus city" as the centrepiece.
+
+No account, no server, no build step. Everything you enter stays in your browser's local storage.
+
+## Features
+
+- **Focus timer & pomodoro engine** — configurable session and break lengths, presets, custom time,
+  and a dial you can start, pause and reset.
+- **Focus city (3D)** — a live isometric/3D visualisation rendered on canvas that grows with the work
+  you put in.
+- **Tasks** — subjects, priorities, estimated durations, repeat rules and due dates, with quick add.
+- **Syllabus tracker** — subjects and their completion split, so you can see what is left before an exam.
+- **Flashcards** — decks, cards with due dates, and a cram mode for last-minute revision.
+- **Planner** — time blocks for the day, so sessions map to a real schedule.
+- **Analytics** — sessions, focus time, streak, consistency, average session length, subject split,
+  hour-of-day heat, plus deltas against your previous period.
+- **Exam countdown, next-up and today's rhythm** on the home screen.
+- **Coach** — short, rule-based nudges based on your recent consistency.
+- **Offline & installable** — ships a web app manifest and a service worker, so it installs to the
+  home screen and works without a connection.
+
+## Run it
+
+Open `index.html` in a browser. That is the whole app.
+
+To run it as a proper PWA (service worker and install prompt need a secure origin), serve the folder:
+
+```bash
+python3 -m http.server 8080
+# then open http://localhost:8080
+```
+
+## Deploy on GitHub Pages
+
+1. Push this repo to GitHub (see below).
+2. Repository **Settings → Pages**.
+3. Under **Build and deployment**, choose **Deploy from a branch**, branch `main`, folder `/ (root)`.
+4. Save. The app goes live at `https://<your-username>.github.io/<repo-name>/`.
+
+The `.nojekyll` file is already included, so GitHub Pages serves the files as-is.
+
+## Project layout
+
+```
+index.html          the entire app — markup, styles and logic in one file
+manifest.json       web app manifest (name, icons, standalone display)
+sw.js               service worker — offline shell cache
+icons/              app icons (192, 512, apple-touch)
+.nojekyll           tells GitHub Pages to skip Jekyll processing
+LICENSE             MIT
+```
+
+## Notes
+
+- Data lives in `localStorage` under the app's origin. Clearing site data clears your progress.
+  Moving from `file://` to a hosted URL means a fresh start, because the origin changes.
+- Fonts (Space Grotesk, JetBrains Mono) load from Google Fonts; the app still runs without them.
+- The icons in `icons/` are simple generated placeholders — swap in your own art at the same
+  filenames and sizes.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
