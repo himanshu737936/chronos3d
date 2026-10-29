@@ -1,0 +1,16 @@
+{
+  "name": "Chronos3D — 3D Study OS",
+  "short_name": "Chronos3D",
+  "description": "A 3D study OS: focus timer, pomodoro engine, tasks, syllabus tracker, flashcards, planner and deep analytics. Offline, no account.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#05060c",
+  "theme_color": "#05060c",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
