@@ -14,7 +14,7 @@
 <link rel="manifest" href="manifest.json" />
 <link rel="apple-touch-icon" href="icons/icon-192.png" />
 <meta name="application-name" content="Chronos3D" />
-<meta name="app-version" content="3.1.1" />
+<meta name="app-version" content="3.2.0" />
 <meta name="app-build" content="2026-10-29" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -1766,7 +1766,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
   var FF = (global.FF = global.FF || {});
   var KEY = 'chronos3d.state.v3';
-  var APP_VERSION = '3.1.1';
+  var APP_VERSION = '3.2.0';
   var APP_BUILD = '2026-10-29';
   FF.version = function () { return { version: APP_VERSION, build: APP_BUILD }; };
   var LEGACY = ['chronos3d.state.v2', 'chronos3d.state.v1'];
@@ -1787,6 +1787,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
       countdown: { duration: 25 * 60000, remaining: 25 * 60000 },
       pomoTask: '', pomoSubject: '',
       runtime: null, cdRuntime: null,
+      pendingPomo: 0, stopwatch: null,
       flags: {}
     };
   }
@@ -1872,7 +1873,15 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
     base.pomoTask = typeof raw.pomoTask === 'string' ? raw.pomoTask : '';
     base.pomoSubject = typeof raw.pomoSubject === 'string' ? raw.pomoSubject : '';
     base.flags = raw.flags && typeof raw.flags === 'object' ? raw.flags : {};
-    base.runtime = (raw.runtime && typeof raw.runtime === 'object' && raw.runtime.endsAt) ? raw.runtime : null;
+    /* runtime is now kept for paused blocks too, so a reload does not lose
+       the time already focused */
+    base.runtime = (raw.runtime && typeof raw.runtime === 'object' &&
+      (raw.runtime.endsAt || raw.runtime.remaining)) ? raw.runtime : null;
+    base.pendingPomo = Math.max(0, Number(raw.pendingPomo) || 0);
+    base.stopwatch = (raw.stopwatch && typeof raw.stopwatch === 'object') ? {
+      acc: Math.max(0, Number(raw.stopwatch.acc) || 0),
+      at: Math.max(0, Number(raw.stopwatch.at) || 0)
+    } : null;
     base.cdRuntime = (raw.cdRuntime && typeof raw.cdRuntime === 'object' && raw.cdRuntime.endsAt) ? raw.cdRuntime : null;
     base.countdown.duration = clamp(Number(base.countdown.duration) || 1500000, 1000, 43200000);
     base.countdown.remaining = clamp(Number(base.countdown.remaining) || base.countdown.duration, 0, base.countdown.duration);
@@ -2981,17 +2990,51 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   /* ============================================================
      POMODORO
      ============================================================ */
-  var p = { phase: 'work', running: false, endsAt: 0, remaining: 0, doneInCycle: 0, taskId: '', leaves: 0, startId: '' };
+  var p = { phase: 'work', running: false, endsAt: 0, remaining: 0, doneInCycle: 0, taskId: '', leaves: 0, startId: '', accum: 0, segStart: 0 };
+
+  /* Anything shorter than this is noise, not a study session. */
+  var MIN_PARTIAL = 10000;
+
+  /* time focused in the current phase, across pauses */
+  function pomoElapsed() {
+    return (p.accum || 0) + (p.running && p.segStart ? Date.now() - p.segStart : 0);
+  }
+
+  function savePending() {
+    FF.state.pendingPomo = Math.max(0, Math.round(p.accum || 0));
+  }
+
+  /* Bank whatever has been focused so far. Called when a block is reset,
+     skipped or abandoned, so nothing is ever thrown away. */
+  function bankPomo() {
+    var ms = pomoElapsed();
+    var logged = null;
+    if (ms >= MIN_PARTIAL && p.phase === 'work') {
+      var task = p.taskId ? FF.taskById(p.taskId) : null;
+      logged = FF.logSession('work', ms, p.taskId, task ? (task.subjectId || '') : '');
+      if (logged) { logged.partial = true; if (p.startId) FF.completeStart(p.startId); }
+    }
+    p.accum = 0;
+    p.segStart = p.running ? Date.now() : 0;
+    savePending();
+    FF.persist();
+    return logged;
+  }
 
   function s() { return FF.state.settings; }
 
   /* the running block is written to storage so the app can settle it
      even if Android kills the page while it is in the background */
   function saveRuntime() {
-    FF.state.runtime = p.running ? {
-      phase: p.phase, endsAt: p.endsAt, remaining: p.remaining,
+    /* kept for paused blocks as well: endsAt is 0 while paused and the
+       remaining time is restored on the next launch */
+    FF.state.runtime = (p.running || p.remaining || p.accum) ? {
+      phase: p.phase,
+      endsAt: p.running ? p.endsAt : 0,
+      remaining: p.remaining,
       taskId: p.taskId, doneInCycle: p.doneInCycle,
-      startId: p.startId, leaves: p.leaves
+      startId: p.startId, leaves: p.leaves,
+      accum: Math.round(p.accum || 0)
     } : null;
     FF.persist();
   }
@@ -3098,6 +3141,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
     var fresh = p.remaining >= full;
     p.endsAt = Date.now() + p.remaining;
     p.running = true;
+    p.segStart = Date.now();
     if (fresh) {
       p.leaves = 0;
       p.startId = (FF.logStart(p.phase === 'work' ? 'work' : p.phase, full) || {}).id || '';
@@ -3127,7 +3171,10 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
   function pause() {
     p.remaining = remaining();
+    p.accum = pomoElapsed();
+    p.segStart = 0;
     p.running = false;
+    savePending();
     FF.sound('pause');
     FF.haptic('tap');
     FF.wake.release();
@@ -3139,6 +3186,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   function toggle() { if (p.running) pause(); else start(); }
 
   function fullReset() {
+    bankPomo();
     p.running = false;
     p.phase = 'work';
     p.doneInCycle = 0;
@@ -3162,6 +3210,10 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
         FF.emit('tasks:changed');
       }
     }
+
+    p.accum = 0;
+    p.segStart = 0;
+    savePending();
 
     if (finished === 'work') {
       p.doneInCycle += 1;
@@ -3258,6 +3310,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
   function skip() {
     p.running = false;
+    bankPomo();
     advance(false);
     FF.haptic('tap');
     FF.snack('Phase skipped');
@@ -3485,7 +3538,23 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
     FF.persist(); FF.sound('pause'); FF.haptic('tap'); FF.wake.release(); cdPaint();
   }
   function cdToggle() { if (cd.running) cdPause(); else cdStart(); }
+  /* elapsed time in the current countdown run, planned minus remaining */
+  function cdElapsed() {
+    var planned = cd.sessionMs || FF.state.countdown.duration;
+    return Math.max(0, planned - cdRemaining());
+  }
+  /* bank what was actually counted down before the timer is cleared */
+  function bankCountdown() {
+    var ms = cdElapsed();
+    if (ms >= MIN_PARTIAL) {
+      var logged = FF.logSession('focus', ms, '', '');
+      if (logged) { logged.partial = true; if (cd.startId) FF.completeStart(cd.startId); }
+    }
+    cd.sessionMs = 0; cd.startId = '';
+  }
+
   function cdReset() {
+    bankCountdown();
     cd.running = false; cd.sessionMs = 0; cd.startId = '';
     FF.state.countdown.remaining = FF.state.countdown.duration;
     FF.state.cdRuntime = null;
@@ -3494,6 +3563,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   }
   function cdSet(ms) {
     ms = U.clamp(Math.round(ms), 1000, 12 * 3600000);
+    bankCountdown();
     cd.running = false; cd.sessionMs = 0; cd.startId = '';
     FF.state.countdown.duration = ms;
     FF.state.countdown.remaining = ms;
@@ -3588,6 +3658,14 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
     el.swTime.textContent = U.fmtStopwatch(swElapsed());
     el.swToggle.textContent = sw.running ? 'Pause' : (swElapsed() > 0 ? 'Resume' : 'Start');
   }
+  function saveSw() {
+    FF.state.stopwatch = (sw.running || sw.acc) ? {
+      acc: Math.round(sw.acc || 0),
+      at: sw.running ? sw.startedAt : 0
+    } : null;
+    FF.persist();
+  }
+
   function swToggle() {
     if (sw.running) {
       sw.acc = swElapsed(); sw.running = false;
@@ -3597,11 +3675,13 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
       sw.startId = (FF.logStart('work', 0) || {}).id || '';
       FF.sound('start'); FF.wake.request();
     }
+    saveSw();
     FF.haptic('toggle'); swPaint();
   }
   function swReset() {
     var total = swElapsed();
     sw.running = false; sw.acc = 0; sw.laps = [];
+    FF.state.stopwatch = null;
     FF.wake.release();
     if (total > 5000) { FF.logSession('focus', total, '', ''); if (sw.startId) FF.completeStart(sw.startId); }
     sw.startId = '';
@@ -3793,6 +3873,21 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
       /* settle whatever was running when the app was last closed */
       var rt = FF.state.runtime;
+      if (rt && !rt.endsAt) {
+        /* paused block: put it back on the dial, keep the time already banked */
+        p.phase = rt.phase || 'work';
+        p.taskId = rt.taskId || p.taskId;
+        p.doneInCycle = rt.doneInCycle || 0;
+        p.accum = Math.max(0, Number(rt.accum) || 0);
+        p.segStart = 0;
+        p.startId = rt.startId || '';
+        p.remaining = Math.max(0, Number(rt.remaining) || 0) || phaseMs(p.phase);
+        p.running = false;
+        savePending();
+        setTimeout(function () {
+          FF.snack('Your paused block is still here \u2014 ' + U.fmtClock(p.remaining) + ' left', { kind: 'good' });
+        }, 1000);
+      }
       if (rt && rt.endsAt) {
         if (rt.endsAt > Date.now()) {
           p.phase = rt.phase || 'work';
@@ -3815,6 +3910,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
             task.pomos = (task.pomos || 0) + 1;
             FF.emit('tasks:changed');
           }
+          p.accum = 0; savePending();
           p.doneInCycle = (rt.doneInCycle || 0) + (rt.phase === 'work' ? 1 : 0);
           var cyc = Math.max(2, s().cycles);
           p.phase = rt.phase === 'work'
@@ -3854,6 +3950,48 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
             FF.snack('Your timer finished while you were away \u2014 ' + U.fmtDuration(loggedMs) + ' logged', { kind: 'good' });
           }, 1100);
         }
+      }
+
+      /* ---- nothing focused is ever lost: settle leftovers from last time ---- */
+      if (!p.running && !FF.state.runtime && FF.state.pendingPomo >= MIN_PARTIAL) {
+        var owed = FF.state.pendingPomo;
+        var owedTask = p.taskId ? FF.taskById(p.taskId) : null;
+        var owedSession = FF.logSession('work', owed, p.taskId || '', owedTask ? (owedTask.subjectId || '') : '');
+        if (owedSession) owedSession.partial = true;
+        setTimeout(function () {
+          FF.snack('Saved ' + U.fmtDuration(owed) + ' from your last block', { kind: 'good' });
+        }, 1200);
+      }
+      /* keep the accumulator when a paused block was just restored — it is
+         still live on the dial and will be banked when it ends or resets */
+      if (!p.running && !FF.state.runtime) { p.accum = 0; savePending(); FF.persist(); }
+
+      if (!cd.running && FF.state.countdown.remaining < FF.state.countdown.duration) {
+        var lostCd = FF.state.countdown.duration - FF.state.countdown.remaining;
+        if (lostCd >= MIN_PARTIAL) {
+          var cdSession = FF.logSession('focus', lostCd, '', '');
+          if (cdSession) cdSession.partial = true;
+          setTimeout(function () {
+            FF.snack('Saved ' + U.fmtDuration(lostCd) + ' from your last timer', { kind: 'good' });
+          }, 1600);
+        }
+        FF.state.countdown.remaining = FF.state.countdown.duration;
+        FF.state.cdRuntime = null;
+        FF.persist();
+      }
+
+      var stw = FF.state.stopwatch;
+      if (stw && (stw.acc || stw.at)) {
+        var swTotal = (stw.acc || 0) + (stw.at ? Math.max(0, Date.now() - stw.at) : 0);
+        if (swTotal >= MIN_PARTIAL) {
+          var swSession = FF.logSession('focus', swTotal, '', '');
+          if (swSession) swSession.partial = true;
+          setTimeout(function () {
+            FF.snack('Saved ' + U.fmtDuration(swTotal) + ' from your stopwatch', { kind: 'good' });
+          }, 2000);
+        }
+        FF.state.stopwatch = null;
+        FF.persist();
       }
 
       cdHighlight();

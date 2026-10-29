@@ -7,7 +7,7 @@ rendered 3D "focus city" as the centrepiece.
 
 No account, no server, no build step. Everything you enter stays in your browser's local storage.
 
-**Version 3.1.1** · build 2026-10-29
+**Version 3.2.0** · build 2026-10-29
 
 ## Features
 
@@ -25,6 +25,22 @@ No account, no server, no build step. Everything you enter stays in your browser
 - **Coach** — short, rule-based nudges based on your recent consistency.
 - **Offline & installable** — ships a web app manifest and a service worker, so it installs to the
   home screen and works without a connection.
+
+## Nothing you focus is lost
+
+Time is banked automatically, not only when a block runs to the end:
+
+- Reset or skip a running block — the minutes you actually focused are saved
+  as a session (marked `partial`). Anything under 10 seconds is treated as
+  noise and dropped.
+- Pause and close the app — the block comes back on the dial with its time
+  still on it; the banked part is logged when it ends or resets.
+- Countdown: setting a new time or resetting banks what was already counted
+  down.
+- Stopwatch: the elapsed time is persisted; if it is left behind, it is saved
+  on the next launch.
+- A block that finishes while the app is closed is logged on reopen, once —
+  never twice.
 
 ## Updating
 
