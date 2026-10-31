@@ -14,7 +14,7 @@
 <link rel="manifest" href="manifest.json" />
 <link rel="apple-touch-icon" href="icons/icon-192.png" />
 <meta name="application-name" content="Chronos3D" />
-<meta name="app-version" content="3.2.0" />
+<meta name="app-version" content="3.3.0" />
 <meta name="app-build" content="2026-10-29" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -1766,7 +1766,9 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
   var FF = (global.FF = global.FF || {});
   var KEY = 'chronos3d.state.v3';
-  var APP_VERSION = '3.2.0';
+  var BACKUP = 'chronos3d.state.backup';
+  var REVKEY = 'chronos3d.rev';   /* tiny mirror of state.rev — keeps the merge check cheap */
+  var APP_VERSION = '3.3.0';
   var APP_BUILD = '2026-10-29';
   FF.version = function () { return { version: APP_VERSION, build: APP_BUILD }; };
   var LEGACY = ['chronos3d.state.v2', 'chronos3d.state.v1'];
@@ -1776,6 +1778,8 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   function defaults() {
     return {
       version: 3,
+      rev: 0,
+      savedAt: 0,
       settings: {
         work: 25, short: 5, long: 15, cycles: 4,
         autoStart: false, sound: true, notify: false,
@@ -1859,6 +1863,8 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   function normalise(raw) {
     var base = defaults();
     if (!raw || typeof raw !== 'object') return base;
+    base.rev = Math.max(0, Number(raw.rev) || 0);
+    base.savedAt = Math.max(0, Number(raw.savedAt) || 0);
     base.settings = Object.assign(base.settings, raw.settings || {});
     base.tasks = Array.isArray(raw.tasks) ? raw.tasks.filter(function (t) { return t && typeof t.id === 'string' && typeof t.title === 'string'; }) : [];
     base.sessions = Array.isArray(raw.sessions) ? raw.sessions.filter(function (s) { return s && typeof s.ms === 'number'; }) : [];
@@ -2004,16 +2010,120 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
   /* ---------------- persist ---------------- */
   var persistFailed = false;
+  var lastBackupAt = 0;
+
+  function readKey(k) {
+    try { var raw = global.localStorage.getItem(k); return raw ? JSON.parse(raw) : null; }
+    catch (e) { return null; }
+  }
+
+  function isEmptyState(s) {
+    return !s || (!s.tasks.length && !s.subjects.length && !s.cards.length &&
+      !s.sessions.length && !s.plan.length);
+  }
+
+  /* A blank screen after an update is almost always a lost write, not a
+     deliberate reset — put the previous snapshot back. */
+  (function recoverFromBackup() {
+    try {
+      if (readVault()) return;               /* a PIN vault owns the data */
+      if (!isEmptyState(FF.state)) return;
+      var bk = readKey(BACKUP);
+      if (!bk) return;
+      var restored = normalise(bk);
+      if (isEmptyState(restored)) return;
+      FF.state = restored;
+      FF.state.recovered = true;
+      FF.state.rev = (Number(restored.rev) || 0) + 1;
+      FF.state.savedAt = Date.now();
+      global.localStorage.setItem(KEY, JSON.stringify(FF.state));
+    } catch (e) { /* nothing to recover */ }
+  })();
+
+  /* Two contexts on the same origin (the installed app and a browser tab,
+     say) each hold their own copy of the state, and the last writer used to
+     win — which silently erased the other one's tasks. Merge by id instead:
+     keep everything the other side added, and let disk win on shared ids so
+     nothing is dropped. */
+  function unionById(diskList, myList) {
+    var seen = {}, out = [];
+    (diskList || []).forEach(function (x) {
+      if (!x || !x.id) return;
+      seen[x.id] = true; out.push(x);
+    });
+    (myList || []).forEach(function (x) {
+      if (!x || !x.id || seen[x.id]) return;
+      seen[x.id] = true; out.push(x);
+    });
+    return out;
+  }
+
+  function mergeWithDisk(disk, mine) {
+    if (!disk || typeof disk !== 'object') return mine;
+    var merged = JSON.parse(JSON.stringify(disk));
+    merged.settings = mine.settings || merged.settings;
+    merged.tasks = unionById(disk.tasks, mine.tasks);
+    merged.subjects = unionById(disk.subjects, mine.subjects);
+    merged.cards = unionById(disk.cards, mine.cards);
+    merged.plan = unionById(disk.plan, mine.plan);
+    merged.sessions = unionById(disk.sessions, mine.sessions);
+    merged.starts = unionById(disk.starts, mine.starts);
+    merged.flags = Object.assign({}, disk.flags || {}, mine.flags || {});
+    merged.rev = Math.max(Number(disk.rev) || 0, Number(mine.rev) || 0) + 1;
+    return merged;
+  }
+
   FF.persist = function () {
     try {
-      if (vaultKey) {
-        encryptState();
-        return true;
+      if (vaultKey) { encryptState(); return true; }
+      /* a locked vault owns the data: writing a plaintext copy here would
+         shadow it with an empty state */
+      if (readVault() && !vaultKey) return false;
+
+      var mineRev = Number(FF.state.rev) || 0;
+      var diskRev = 0;
+      try { diskRev = Number(global.localStorage.getItem(REVKEY)) || 0; } catch (e) { diskRev = 0; }
+
+      if (diskRev > mineRev) {
+        /* another context wrote after we loaded: merge before overwriting.
+           Only now do we pay for parsing the whole state. */
+        var disk = readKey(KEY);
+        if (disk) FF.state = normalise(mergeWithDisk(disk, FF.state));
+        else FF.state.rev = mineRev + 1;
+      } else {
+        FF.state.rev = mineRev + 1;
       }
-      global.localStorage.setItem(KEY, JSON.stringify(FF.state));
+      FF.state.savedAt = Date.now();
+
+      var next = JSON.stringify(FF.state);
+      /* keep a rolling backup, but do not pay for a second full write on
+         every single keystroke — once every few seconds is plenty */
+      try {
+        var now = Date.now();
+        if (now - lastBackupAt > 4000) {
+          var prevRaw = global.localStorage.getItem(KEY);
+          if (prevRaw && prevRaw !== next) {
+            global.localStorage.setItem(BACKUP, prevRaw);
+            lastBackupAt = now;
+          }
+        }
+      } catch (e) { /* backup is best effort */ }
+
+      global.localStorage.setItem(KEY, next);
+      try { global.localStorage.setItem(REVKEY, String(FF.state.rev)); } catch (e) { /* ignore */ }
       persistFailed = false;
       return true;
     } catch (e) {
+      /* quota: drop the oldest sessions once, then try again */
+      try {
+        if (FF.state.sessions && FF.state.sessions.length > 800) {
+          FF.state.sessions = FF.state.sessions.slice(-800);
+          global.localStorage.setItem(KEY, JSON.stringify(FF.state));
+          FF.snack('Storage was full — older sessions were trimmed to make room.', { kind: 'warn' });
+          persistFailed = false;
+          return true;
+        }
+      } catch (e2) { /* still full */ }
       if (!persistFailed) {
         persistFailed = true;
         FF.snack('Storage is full — recent changes may not survive a restart.', { kind: 'warn' });
@@ -2023,12 +2133,32 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   };
   FF.save = debounce(FF.persist, 200);
 
+  /* another tab / the installed app wrote: take its copy instead of
+     overwriting it later with our stale one */
+  global.addEventListener('storage', function (e) {
+    if (!e || e.key !== KEY || !e.newValue) return;
+    var obj = null;
+    try { obj = JSON.parse(e.newValue); } catch (err) { return; }
+    if (!obj) return;
+    if ((Number(obj.rev) || 0) <= (Number(FF.state.rev) || 0)) return;
+    FF.state = normalise(obj);
+    FF.emit('state:adopted', FF.state);
+  });
+
   FF.resetAll = function () {
+    var disk = readKey(KEY);
     FF.state = defaults();
+    /* jump ahead of the disk revision so the merge guard does not pull the
+       old data straight back */
+    FF.state.rev = ((disk && Number(disk.rev)) || 0) + 1;
     FF.persist();
+    try { global.localStorage.removeItem(BACKUP); } catch (e) { /* ignore */ }
   };
   FF.replaceState = function (obj) {
+    var disk = readKey(KEY);
     FF.state = normalise(obj);
+    /* an imported/restored snapshot must replace, not merge */
+    FF.state.rev = ((disk && Number(disk.rev)) || 0) + 1;
     FF.persist();
   };
 
@@ -6055,6 +6185,22 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   }
 
   /* Everything we would ask for on a bug report, in one screen. */
+  function refreshAll() {
+    try { FF.tasks.render(); } catch (e) {}
+    try { FF.study.renderSubjects(); FF.study.renderExams(); } catch (e) {}
+    try { if (FF.study.renderPlan) FF.study.renderPlan(); } catch (e) {}
+    try { if (FF.study.buildQueue) FF.study.buildQueue(); } catch (e) {}
+    try { FF.analytics.render(); } catch (e) {}
+    try { updateHome(); } catch (e) {}
+  }
+
+  function backupSnapshot() {
+    try {
+      var raw = global.localStorage.getItem('chronos3d.state.backup');
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
   function storageSize() {
     try { return (new Blob([JSON.stringify(FF.state)]).size / 1024).toFixed(1); }
     catch (e) { return '0'; }
@@ -6220,6 +6366,14 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
           FF.state.tasks.length + ' tasks · ' + FF.state.sessions.length + ' sessions · ' +
           FF.state.subjects.length + ' subjects · ' + FF.state.cards.length + ' cards · ' + (size / 1024).toFixed(1) + ' KB' +
         '</small></span></button>' +
+        '<button class="menu-item" id="mRestore"><span class="mi-icon">&#8634;</span><span>Restore last backup<small>' +
+          (function () {
+            var bk = backupSnapshot();
+            if (!bk) return 'No backup saved yet';
+            return (bk.tasks || []).length + ' tasks · ' + (bk.sessions || []).length + ' sessions · ' +
+              (bk.subjects || []).length + ' subjects';
+          })() +
+        '</small></span></button>' +
         '<button class="menu-item danger" id="mReset"><span class="mi-icon">&#10005;</span><span>Reset everything<small>Deletes tasks, subjects, cards, sessions</small></span></button>' +
         '<button class="menu-item" id="mDiag"><span class="mi-icon">&#8801;</span><span>Diagnostics<small>Version, device, feature support, last errors</small></span></button>' +
         '<button class="menu-item" id="mRefresh"><span class="mi-icon">&#8635;</span><span>Force refresh<small>Clear the cache and load the newest build</small></span></button>' +
@@ -6268,20 +6422,59 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
           FF.sheet.close();
         });
         body.querySelector('#mStats').addEventListener('click', function () { FF.sheet.close(); setTimeout(function () { goto('stats'); }, 200); });
+        body.querySelector('#mRestore').addEventListener('click', function () {
+          var bk = backupSnapshot();
+          if (!bk) {
+            FF.snack('No backup yet — it is written on every save', { kind: 'warn' });
+            return;
+          }
+          FF.sheet.close();
+          setTimeout(function () {
+            FF.sheet.open({
+              title: 'Restore backup?',
+              autofocus: false,
+              html:
+                '<p class="hint" style="margin:0 0 16px">The previous snapshot has ' +
+                  (bk.tasks || []).length + ' tasks, ' + (bk.subjects || []).length + ' subjects, ' +
+                  (bk.cards || []).length + ' cards and ' + (bk.sessions || []).length + ' sessions. ' +
+                  'Restoring replaces what is here now.</p>' +
+                '<div class="sheet-row"><button class="btn btn-ghost" id="restoreNo">Cancel</button>' +
+                '<button class="btn btn-primary" id="restoreYes">Restore</button></div>',
+              mount: function (body2) {
+                body2.querySelector('#restoreNo').addEventListener('click', function () { FF.sheet.close(); });
+                body2.querySelector('#restoreYes').addEventListener('click', function () {
+                  FF.replaceState(bk);
+                  FF.sheet.close();
+                  refreshAll();
+                  FF.snack('Backup restored', { kind: 'good' });
+                  FF.haptic('done');
+                });
+              }
+            });
+          }, 240);
+        });
+
         body.querySelector('#mReset').addEventListener('click', function () {
           FF.sheet.close();
           setTimeout(function () {
-            FF.snack('Delete everything?', {
-              kind: 'warn', action: 'Delete', duration: 6000,
-              onAction: function () {
-                FF.resetAll();
-                FF.tasks.render();
-                FF.study.renderSubjects();
-                FF.study.renderExams();
-                FF.analytics.render();
-                updateHome();
-                FF.focus.reset();
-                FF.snack('Everything reset. Clean slate.', { kind: 'good' });
+            FF.sheet.open({
+              title: 'Delete everything?',
+              autofocus: false,
+              html:
+                '<p class="hint" style="margin:0 0 16px">This deletes every task, subject, card, ' +
+                  'session and plan block on this device. It cannot be undone.</p>' +
+                '<div class="sheet-row"><button class="btn btn-ghost" id="resetNo">Cancel</button>' +
+                '<button class="btn btn-danger" id="resetYes">Delete everything</button></div>',
+              mount: function (body2) {
+                body2.querySelector('#resetNo').addEventListener('click', function () { FF.sheet.close(); });
+                body2.querySelector('#resetYes').addEventListener('click', function () {
+                  FF.resetAll();
+                  refreshAll();
+                  FF.focus.reset();
+                  FF.sheet.close();
+                  FF.snack('Everything deleted. Clean slate.', { kind: 'warn' });
+                  FF.haptic('warn');
+                });
               }
             });
           }, 240);
@@ -6497,6 +6690,16 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
   /* gate -> lock -> app */
   function boot() {
+    if (FF.state && FF.state.recovered) {
+      setTimeout(function () {
+        FF.snack('Your data was restored from the last backup', { kind: 'good', duration: 6000 });
+      }, 2600);
+    }
+    /* another context changed the data: adopt it and repaint */
+    FF.on('state:adopted', function () {
+      refreshAll();
+      FF.snack('Synced with another window', { kind: 'good' });
+    });
     runSplash();
     initGate();
     if (FF.vault.enabled()) initLock();

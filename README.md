@@ -7,7 +7,7 @@ rendered 3D "focus city" as the centrepiece.
 
 No account, no server, no build step. Everything you enter stays in your browser's local storage.
 
-**Version 3.2.0** · build 2026-10-29
+**Version 3.3.0** · build 2026-10-31
 
 ## Features
 
@@ -25,6 +25,23 @@ No account, no server, no build step. Everything you enter stays in your browser
 - **Coach** — short, rule-based nudges based on your recent consistency.
 - **Offline & installable** — ships a web app manifest and a service worker, so it installs to the
   home screen and works without a connection.
+
+## Saving, and why data used to disappear
+
+Every change is written to `localStorage` immediately. Three things now protect it:
+
+- **Two windows cannot wipe each other.** The installed app and a browser tab
+  on the same origin each hold a copy of the state; the last writer used to
+  win, erasing whatever the other one had added. Writes now merge by id (disk
+  wins on shared ids, so nothing is dropped) and a `storage` listener adopts
+  the other window's copy as soon as it changes.
+- **A rolling backup.** Before each save the previous snapshot is kept in
+  `chronos3d.state.backup`. If the main state ever comes up empty — the classic
+  symptom of a lost write — it is restored automatically on boot, and
+  **Menu → Restore last backup** can bring it back by hand.
+- **Resetting is deliberate.** "Delete everything" now opens a confirmation
+  sheet instead of a snackbar, and a reset clears the backup so nothing is
+  resurrected.
 
 ## Nothing you focus is lost
 
